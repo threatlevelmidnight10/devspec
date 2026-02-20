@@ -7,7 +7,7 @@
 Option 1 (recommended): Go install
 
 ```bash
-go install github.com/threatlevelmidnight10/devspec/cmd/devspec@latest
+go install github.com/threatlevelmidnight10/devspec/cmd/devspec@v0.1.0
 ```
 
 Option 2: Homebrew
