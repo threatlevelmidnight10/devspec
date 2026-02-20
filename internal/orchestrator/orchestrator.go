@@ -4,6 +4,7 @@ import "context"
 
 type RunConfig struct {
 	Model string
+	Mode  string
 }
 
 type Result struct {

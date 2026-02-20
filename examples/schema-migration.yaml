@@ -6,7 +6,7 @@ description: Standard workflow for backend schema migrations
 orchestrator:
   type: cursor
   model: claude-3.5-sonnet
-  binary: cursor-agent
+  binary: agent
 
 workspace:
   base_branch: main

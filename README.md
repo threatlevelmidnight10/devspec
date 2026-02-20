@@ -26,7 +26,7 @@ Flags:
 ## Expected Tooling
 
 - `git`
-- Cursor CLI binary (default: `cursor-agent`)
+- Cursor Agent CLI binary (default: `agent`)
 - `gh` (if `output.create_pr: true`)
 
 ## Notes

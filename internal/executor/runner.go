@@ -205,7 +205,7 @@ func (r *Runner) runPhase(ctx context.Context, st *runState, phase string) error
 			Skills:        st.skillBodies,
 			RepoTree:      st.repoTree,
 			GitDiff:       st.gitDiff,
-		}), orchestrator.RunConfig{Model: st.model})
+		}), orchestrator.RunConfig{Model: st.model, Mode: "plan"})
 		if err != nil {
 			return err
 		}
@@ -232,7 +232,7 @@ func (r *Runner) runPhase(ctx context.Context, st *runState, phase string) error
 			RepoTree:   st.repoTree,
 			GitDiff:    st.gitDiff,
 			PlanOutput: st.planOutput,
-		}), orchestrator.RunConfig{Model: st.model})
+		}), orchestrator.RunConfig{Model: st.model, Mode: "agent"})
 		if err != nil {
 			return err
 		}
@@ -255,7 +255,7 @@ func (r *Runner) runPhase(ctx context.Context, st *runState, phase string) error
 			ImplPrompt: st.implementerPrompt,
 			Skills:     st.skillBodies,
 			DiffOutput: d,
-		}), orchestrator.RunConfig{Model: st.model})
+		}), orchestrator.RunConfig{Model: st.model, Mode: "agent"})
 		if err != nil {
 			return err
 		}

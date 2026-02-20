@@ -112,7 +112,7 @@ func Load(path string) (*Spec, error) {
 
 func applyDefaults(s *Spec) {
 	if s.Orchestrator.Binary == "" {
-		s.Orchestrator.Binary = "cursor-agent"
+		s.Orchestrator.Binary = "agent"
 	}
 	if s.Workspace.BaseBranch == "" {
 		s.Workspace.BaseBranch = "main"
