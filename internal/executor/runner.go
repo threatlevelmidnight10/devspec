@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"agentflow/internal/gitutil"
-	"agentflow/internal/orchestrator"
-	"agentflow/internal/prompt"
-	"agentflow/internal/spec"
+	"github.com/threatlevelmidnight10/devspec/internal/gitutil"
+	"github.com/threatlevelmidnight10/devspec/internal/orchestrator"
+	"github.com/threatlevelmidnight10/devspec/internal/prompt"
+	"github.com/threatlevelmidnight10/devspec/internal/spec"
 )
 
 var testFilePattern = regexp.MustCompile(`(?i)(^|/)(test|tests)(/|$)|(_test\.|\.test\.|\.spec\.)`)

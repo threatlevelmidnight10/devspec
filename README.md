@@ -2,6 +2,20 @@
 
 `agentflow` is a thin Go orchestration CLI for deterministic Cursor-agent workflows.
 
+## Install
+
+Option 1 (recommended): Go install
+
+```bash
+go install github.com/threatlevelmidnight10/devspec/cmd/agentflow@latest
+```
+
+Option 2: Homebrew (build from this repo)
+
+```bash
+brew install --HEAD https://raw.githubusercontent.com/threatlevelmidnight10/devspec/main/Formula/agentflow.rb
+```
+
 ## MVP Features
 
 - Declarative YAML workflow spec

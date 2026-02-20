@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"agentflow/internal/spec"
+	"github.com/threatlevelmidnight10/devspec/internal/spec"
 )
 
 type Inputs struct {

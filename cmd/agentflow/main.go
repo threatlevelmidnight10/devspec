@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"agentflow/internal/executor"
-	"agentflow/internal/spec"
+	"github.com/threatlevelmidnight10/devspec/internal/executor"
+	"github.com/threatlevelmidnight10/devspec/internal/spec"
 )
 
 func main() {
