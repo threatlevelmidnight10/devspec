@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -23,6 +24,7 @@ type Options struct {
 	Task            string
 	DryRun          bool
 	NoPR            bool
+	KeepWorkspace   bool
 	ModelOverride   string
 	MaxIterOverride int
 }
@@ -35,8 +37,15 @@ type Runner struct {
 	Now          func() time.Time
 }
 
+type repoState struct {
+	spec       spec.RepoSpec
+	path       string
+	beforeDiff []string
+}
+
 type runState struct {
-	repoRoot           string
+	repos              []repoState
+	workspaceFile      string
 	branchName         string
 	model              string
 	planOutput         string
@@ -75,17 +84,22 @@ func (r *Runner) Run(ctx context.Context) error {
 		r.Orchestrator = orchestrator.CursorRunner{Binary: r.Spec.Orchestrator.Binary}
 	}
 
-	if err := gitutil.EnsureRepo(ctx, r.Workdir); err != nil {
-		return err
-	}
-	root, err := gitutil.RepoRoot(ctx, r.Workdir)
-	if err != nil {
-		return err
-	}
-	st.repoRoot = root
-
-	if err := gitutil.EnsureClean(ctx, st.repoRoot); err != nil {
-		return err
+	for _, rSpec := range r.Spec.Workspace.Repos {
+		p := r.Spec.ResolvePath(rSpec.Path)
+		if err := gitutil.EnsureRepo(ctx, p); err != nil {
+			return fmt.Errorf("repo %q: %w", rSpec.Name, err)
+		}
+		root, err := gitutil.RepoRoot(ctx, p)
+		if err != nil {
+			return fmt.Errorf("repo %q: %w", rSpec.Name, err)
+		}
+		if err := gitutil.EnsureClean(ctx, root); err != nil {
+			return fmt.Errorf("repo %q: %w", rSpec.Name, err)
+		}
+		st.repos = append(st.repos, repoState{
+			spec: rSpec,
+			path: root,
+		})
 	}
 
 	if err := r.loadContent(st); err != nil {
@@ -93,23 +107,38 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 
 	if r.Spec.Context.IncludeRepoTree {
-		tree, err := gitutil.RepoTree(ctx, st.repoRoot)
-		if err != nil {
-			return err
+		var trees []string
+		for _, rs := range st.repos {
+			tree, err := gitutil.RepoTree(ctx, rs.path)
+			if err != nil {
+				return err
+			}
+			trees = append(trees, fmt.Sprintf("==> %s:\n%s", rs.spec.Name, tree))
 		}
-		st.repoTree = tree
+		st.repoTree = strings.Join(trees, "\n\n")
 	}
 	if r.Spec.Context.IncludeGitDiff {
-		d, err := gitutil.Diff(ctx, st.repoRoot)
-		if err != nil {
-			return err
+		var diffs []string
+		for _, rs := range st.repos {
+			d, err := gitutil.Diff(ctx, rs.path)
+			if err != nil {
+				return err
+			}
+			if d != "" {
+				diffs = append(diffs, fmt.Sprintf("==> %s:\n%s", rs.spec.Name, d))
+			}
 		}
-		st.gitDiff = d
+		st.gitDiff = strings.Join(diffs, "\n\n")
 	}
 
 	if err := r.setupWorkspace(ctx, st); err != nil {
 		return err
 	}
+	defer func() {
+		if st.workspaceFile != "" && !r.Opts.KeepWorkspace {
+			os.RemoveAll(st.workspaceFile)
+		}
+	}()
 
 	for _, phase := range r.Spec.Execution.Phases {
 		fmt.Printf("==> phase: %s\n", phase)
@@ -161,28 +190,71 @@ func (r *Runner) loadContent(st *runState) error {
 }
 
 func (r *Runner) setupWorkspace(ctx context.Context, st *runState) error {
-	if r.Opts.DryRun {
-		current, err := gitutil.CurrentBranch(ctx, st.repoRoot)
-		if err != nil {
-			return err
+	st.branchName = makeBranchName(r.Spec.Workspace.BranchPref, r.Spec.Name, r.Now())
+
+	if !r.Opts.DryRun {
+		for _, rs := range st.repos {
+			if err := gitutil.Checkout(ctx, rs.path, rs.spec.BaseBranch); err != nil {
+				return fmt.Errorf("repo %q checkout: %w", rs.spec.Name, err)
+			}
+			if err := gitutil.PullFFOnly(ctx, rs.path); err != nil {
+				return fmt.Errorf("repo %q pull: %w", rs.spec.Name, err)
+			}
+			if err := gitutil.CreateBranch(ctx, rs.path, st.branchName); err != nil {
+				return fmt.Errorf("repo %q fork: %w", rs.spec.Name, err)
+			}
 		}
-		st.branchName = current
-		fmt.Println("dry-run enabled: workspace mutations skipped")
+		fmt.Printf("created branch: %s\n", st.branchName)
+	} else {
+		fmt.Printf("dry-run enabled: workspace mutations skipped\n")
+	}
+
+	// Generate .code-workspace file
+	if err := r.writeWorkspaceFile(st); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *Runner) writeWorkspaceFile(st *runState) error {
+	if len(st.repos) == 1 {
+		// Single repo: no need for a workspace file, we will just pass the path.
+		// For Cursor, we can just omit the workspace file and it opens the dir.
 		return nil
 	}
 
-	if err := gitutil.Checkout(ctx, st.repoRoot, r.Spec.Workspace.BaseBranch); err != nil {
-		return err
+	tmpDir, err := os.MkdirTemp("", "devspec-run-*")
+	if err != nil {
+		return fmt.Errorf("create temp workspace dir: %w", err)
 	}
-	if err := gitutil.PullFFOnly(ctx, st.repoRoot); err != nil {
-		return err
+	wsFile := filepath.Join(tmpDir, "devspec.code-workspace")
+
+	type folder struct {
+		Name string `json:"name,omitempty"`
+		Path string `json:"path"`
+	}
+	type workspaceJSON struct {
+		Folders []folder `json:"folders"`
 	}
 
-	st.branchName = makeBranchName(r.Spec.Workspace.BranchPref, r.Spec.Name, r.Now())
-	if err := gitutil.CreateBranch(ctx, st.repoRoot, st.branchName); err != nil {
-		return err
+	var w workspaceJSON
+	for _, rs := range st.repos {
+		w.Folders = append(w.Folders, folder{
+			Name: rs.spec.Name,
+			Path: rs.path,
+		})
 	}
-	fmt.Printf("created branch: %s\n", st.branchName)
+
+	b, err := json.MarshalIndent(w, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal workspace json: %w", err)
+	}
+	if err := os.WriteFile(wsFile, b, 0644); err != nil {
+		return fmt.Errorf("write workspace file: %w", err)
+	}
+	// The cursor CLI expects the workspace flag to be the DIRECTORY containing the .code-workspace file
+	// or just the directory if there is no workspace file.
+	st.workspaceFile = tmpDir
 	return nil
 }
 
@@ -194,10 +266,14 @@ func (r *Runner) runPhase(ctx context.Context, st *runState, phase string) error
 
 	switch phase {
 	case "plan":
-		before, err := gitutil.ChangedFiles(ctx, st.repoRoot)
-		if err != nil {
-			return err
+		for i := range st.repos {
+			before, err := gitutil.ChangedFiles(ctx, st.repos[i].path)
+			if err != nil {
+				return err
+			}
+			st.repos[i].beforeDiff = before
 		}
+
 		out, err := r.Orchestrator.Run(ctx, prompt.BuildPlan(prompt.Inputs{
 			Spec:          r.Spec,
 			Task:          r.Opts.Task,
@@ -205,17 +281,20 @@ func (r *Runner) runPhase(ctx context.Context, st *runState, phase string) error
 			Skills:        st.skillBodies,
 			RepoTree:      st.repoTree,
 			GitDiff:       st.gitDiff,
-		}), orchestrator.RunConfig{Model: st.model, Mode: "plan"})
+		}), orchestrator.RunConfig{Model: st.model, Mode: "plan", WorkspacePath: st.workspaceFile})
 		if err != nil {
 			return err
 		}
 		st.planOutput = out.Stdout
-		after, err := gitutil.ChangedFiles(ctx, st.repoRoot)
-		if err != nil {
-			return err
-		}
-		if !sameFiles(before, after) {
-			return errors.New("plan phase modified files, which is not allowed")
+
+		for _, rs := range st.repos {
+			after, err := gitutil.ChangedFiles(ctx, rs.path)
+			if err != nil {
+				return err
+			}
+			if !sameFiles(rs.beforeDiff, after) {
+				return fmt.Errorf("plan phase modified files in repo %q, which is not allowed", rs.spec.Name)
+			}
 		}
 		fmt.Println("plan phase complete")
 		return nil
@@ -232,7 +311,7 @@ func (r *Runner) runPhase(ctx context.Context, st *runState, phase string) error
 			RepoTree:   st.repoTree,
 			GitDiff:    st.gitDiff,
 			PlanOutput: st.planOutput,
-		}), orchestrator.RunConfig{Model: st.model, Mode: "agent"})
+		}), orchestrator.RunConfig{Model: st.model, Mode: "agent", WorkspacePath: st.workspaceFile})
 		if err != nil {
 			return err
 		}
@@ -246,16 +325,24 @@ func (r *Runner) runPhase(ctx context.Context, st *runState, phase string) error
 		if err := r.bumpIteration(st); err != nil {
 			return err
 		}
-		d, err := gitutil.Diff(ctx, st.repoRoot)
-		if err != nil {
-			return err
+
+		var currentDiffs []string
+		for _, rs := range st.repos {
+			d, err := gitutil.Diff(ctx, rs.path)
+			if err != nil {
+				return err
+			}
+			if d != "" {
+				currentDiffs = append(currentDiffs, fmt.Sprintf("==> %s:\n%s", rs.spec.Name, d))
+			}
 		}
-		_, err = r.Orchestrator.Run(ctx, prompt.BuildSelfReview(prompt.Inputs{
+
+		_, err := r.Orchestrator.Run(ctx, prompt.BuildSelfReview(prompt.Inputs{
 			Spec:       r.Spec,
 			ImplPrompt: st.implementerPrompt,
 			Skills:     st.skillBodies,
-			DiffOutput: d,
-		}), orchestrator.RunConfig{Model: st.model, Mode: "agent"})
+			DiffOutput: strings.Join(currentDiffs, "\n\n"),
+		}), orchestrator.RunConfig{Model: st.model, Mode: "agent", WorkspacePath: st.workspaceFile})
 		if err != nil {
 			return err
 		}
@@ -279,24 +366,38 @@ func (r *Runner) bumpIteration(st *runState) error {
 }
 
 func (r *Runner) validateMutation(ctx context.Context, st *runState, requireDiff bool) error {
-	d, err := gitutil.Diff(ctx, st.repoRoot)
-	if err != nil {
-		return err
+	var totalLines int
+	var anyFiles bool
+	var hasTests bool
+
+	for _, rs := range st.repos {
+		d, err := gitutil.Diff(ctx, rs.path)
+		if err != nil {
+			return err
+		}
+		files, err := gitutil.ChangedFiles(ctx, rs.path)
+		if err != nil {
+			return err
+		}
+
+		if len(files) > 0 {
+			anyFiles = true
+			if hasTestFile(files) {
+				hasTests = true
+			}
+		}
+		totalLines += gitutil.DiffLineCount(d)
 	}
-	files, err := gitutil.ChangedFiles(ctx, st.repoRoot)
-	if err != nil {
-		return err
-	}
-	if requireDiff && len(files) == 0 {
+
+	if requireDiff && !anyFiles {
 		return errors.New("phase produced no diff")
 	}
 
-	lines := gitutil.DiffLineCount(d)
-	if lines > r.Spec.Constraints.MaxDiffLines {
-		return fmt.Errorf("diff line limit exceeded (%d > %d)", lines, r.Spec.Constraints.MaxDiffLines)
+	if totalLines > r.Spec.Constraints.MaxDiffLines {
+		return fmt.Errorf("diff line limit exceeded (%d > %d)", totalLines, r.Spec.Constraints.MaxDiffLines)
 	}
 
-	if r.Spec.Constraints.RequireTests && len(files) > 0 && !hasTestFile(files) {
+	if r.Spec.Constraints.RequireTests && anyFiles && !hasTests {
 		return errors.New("constraints.require_tests is true but no test files were modified")
 	}
 
@@ -308,32 +409,40 @@ func (r *Runner) finalize(ctx context.Context, st *runState) error {
 		return nil
 	}
 
-	files, err := gitutil.ChangedFiles(ctx, st.repoRoot)
-	if err != nil {
-		return err
-	}
-	if len(files) == 0 {
-		return errors.New("no changes generated")
+	var anyChanges bool
+	for _, rs := range st.repos {
+		files, err := gitutil.ChangedFiles(ctx, rs.path)
+		if err != nil {
+			return err
+		}
+		if len(files) == 0 {
+			continue // No changes in this repo
+		}
+		anyChanges = true
+
+		if r.Spec.Workspace.AutoCommit {
+			if err := gitutil.AddAll(ctx, rs.path); err != nil {
+				return err
+			}
+			msg := fmt.Sprintf("devspec: %s", r.Spec.Name)
+			if err := gitutil.Commit(ctx, rs.path, msg); err != nil {
+				return err
+			}
+			fmt.Printf("changes committed in %s\n", rs.spec.Name)
+		}
+
+		if r.Spec.Output.CreatePR && !r.Opts.NoPR {
+			if err := gitutil.Push(ctx, rs.path, st.branchName); err != nil {
+				return err
+			}
+			if err := createPR(ctx, rs.path, r.Spec, st.branchName, r.Opts.Task); err != nil {
+				return err
+			}
+		}
 	}
 
-	if r.Spec.Workspace.AutoCommit {
-		if err := gitutil.AddAll(ctx, st.repoRoot); err != nil {
-			return err
-		}
-		msg := fmt.Sprintf("devspec: %s", r.Spec.Name)
-		if err := gitutil.Commit(ctx, st.repoRoot, msg); err != nil {
-			return err
-		}
-		fmt.Println("changes committed")
-	}
-
-	if r.Spec.Output.CreatePR && !r.Opts.NoPR {
-		if err := gitutil.Push(ctx, st.repoRoot, st.branchName); err != nil {
-			return err
-		}
-		if err := createPR(ctx, st.repoRoot, r.Spec, st.branchName, r.Opts.Task); err != nil {
-			return err
-		}
+	if !anyChanges {
+		return errors.New("no changes generated across any repo")
 	}
 
 	return nil

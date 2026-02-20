@@ -35,6 +35,10 @@ func Checkout(ctx context.Context, workdir, branch string) error {
 
 func PullFFOnly(ctx context.Context, workdir string) error {
 	_, err := runGit(ctx, workdir, "pull", "--ff-only")
+	if err != nil && strings.Contains(err.Error(), "There is no tracking information") {
+		// Local-only repo, safely ignore
+		return nil
+	}
 	return err
 }
 

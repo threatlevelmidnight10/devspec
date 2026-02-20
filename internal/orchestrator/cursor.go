@@ -56,6 +56,9 @@ func (c CursorRunner) Run(ctx context.Context, prompt string, cfg RunConfig) (Re
 	if cfg.Mode == "plan" || cfg.Mode == "ask" {
 		args = append(args, "--mode", cfg.Mode)
 	}
+	if cfg.WorkspacePath != "" {
+		args = append(args, "--workspace", cfg.WorkspacePath)
+	}
 	args = append(args, prompt)
 
 	cmd := exec.CommandContext(ctx, binary, args...)

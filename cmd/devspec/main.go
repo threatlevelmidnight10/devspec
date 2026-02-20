@@ -42,12 +42,14 @@ func runCommand(args []string) error {
 	var task string
 	var dryRun bool
 	var noPR bool
+	var keepWorkspace bool
 	var modelOverride string
 	var maxIterOverride int
 
 	fs.StringVar(&task, "task", "", "task description to execute")
 	fs.BoolVar(&dryRun, "dry-run", false, "show what would run without changing git state")
 	fs.BoolVar(&noPR, "no-pr", false, "skip PR creation regardless of spec output settings")
+	fs.BoolVar(&keepWorkspace, "keep-workspace", false, "do not delete the temporary Cursor workspace directory after run")
 	fs.StringVar(&modelOverride, "model", "", "override orchestrator model from spec")
 	fs.IntVar(&maxIterOverride, "max-iter", 0, "override max iteration constraint")
 
@@ -69,6 +71,7 @@ func runCommand(args []string) error {
 			Task:            task,
 			DryRun:          dryRun,
 			NoPR:            noPR,
+			KeepWorkspace:   keepWorkspace,
 			ModelOverride:   modelOverride,
 			MaxIterOverride: maxIterOverride,
 		},
@@ -84,6 +87,6 @@ func usage() string {
 	return `devspec - deterministic agent workflow runner
 
 Usage:
-  devspec run <spec.yaml> --task "..." [--dry-run] [--no-pr] [--model override-model] [--max-iter N]
+  devspec run <spec.yaml> --task "..." [--dry-run] [--no-pr] [--keep-workspace] [--model override-model] [--max-iter N]
 `
 }

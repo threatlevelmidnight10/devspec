@@ -167,6 +167,18 @@ devspec will:
 | `branch_prefix` | `agent/` | Prefix for created branches |
 | `auto_commit` | `false` | Commit changes after phases complete |
 
+You can also orchestrate changes across multiple repositories seamlessly by providing a `repos` array. `devspec` will dynamically generate a unified temporary Cursor `.code-workspace` bridging all roots.
+
+```yaml
+workspace:
+  repos:
+    - name: backend
+      path: .
+    - name: frontend
+      path: ../frontend # relative or absolute path
+      base_branch: dev  # overrides global base_branch
+```
+
 ### `context`
 | Field | Default | Description |
 |-------|---------|-------------|
@@ -219,6 +231,7 @@ devspec run <spec.yaml> --task "..." [flags]
 | `--no-pr` | Skip PR creation even if spec says `create_pr: true` |
 | `--model` | Override the model from the spec |
 | `--max-iter` | Override `constraints.max_iterations` |
+| `--keep-workspace` | Skips cleanup of the temporary multi-repo `.code-workspace` directory |
 
 ---
 
@@ -253,4 +266,14 @@ devspec run spec.yaml --task "..."
 
 ## Examples
 
-See [`examples/schema-migration.yaml`](examples/schema-migration.yaml) for a complete working spec.
+See [`examples/schema-migration.yaml`](examples/schema-migration.yaml) and [`examples/multi-repo.yaml`](examples/multi-repo.yaml) for complete working specs.
+
+---
+
+## Roadmap / Upcoming Features
+
+We're rapidly expanding `devspec`'s capabilities. Coming soon:
+
+- **Claude Code Support**: Pluggable AI orchestrator backends, with [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) natively supported.
+- **Central Configuration**: A global `~/.devspec/config.yaml` to standardize rules, agents, and API keys across all projects.
+- **Workflow Templates**: Shareable, pre-configured workflow setups (e.g. `devspec init react-refactor`) so teams can drop in community best-practices instantly.

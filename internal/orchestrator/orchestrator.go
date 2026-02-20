@@ -3,8 +3,9 @@ package orchestrator
 import "context"
 
 type RunConfig struct {
-	Model string
-	Mode  string
+	Model         string
+	Mode          string
+	WorkspacePath string
 }
 
 type Result struct {

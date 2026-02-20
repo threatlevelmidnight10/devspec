@@ -1,12 +1,13 @@
 package spec
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 var allowedPhases = map[string]struct{}{
@@ -39,9 +40,16 @@ type Orchestrator struct {
 }
 
 type Workspace struct {
+	BaseBranch string     `yaml:"base_branch" json:"base_branch"`
+	BranchPref string     `yaml:"branch_prefix" json:"branch_prefix"`
+	AutoCommit bool       `yaml:"auto_commit" json:"auto_commit"`
+	Repos      []RepoSpec `yaml:"repos" json:"repos"`
+}
+
+type RepoSpec struct {
+	Name       string `yaml:"name" json:"name"`
+	Path       string `yaml:"path" json:"path"`
 	BaseBranch string `yaml:"base_branch" json:"base_branch"`
-	BranchPref string `yaml:"branch_prefix" json:"branch_prefix"`
-	AutoCommit bool   `yaml:"auto_commit" json:"auto_commit"`
 }
 
 type Context struct {
@@ -81,18 +89,8 @@ func Load(path string) (*Spec, error) {
 		return nil, fmt.Errorf("read spec: %w", err)
 	}
 
-	root, err := parseYAML(b)
-	if err != nil {
-		return nil, fmt.Errorf("parse YAML: %w", err)
-	}
-
-	j, err := json.Marshal(root)
-	if err != nil {
-		return nil, fmt.Errorf("convert YAML: %w", err)
-	}
-
 	var s Spec
-	if err := json.Unmarshal(j, &s); err != nil {
+	if err := yaml.Unmarshal(b, &s); err != nil {
 		return nil, fmt.Errorf("decode spec: %w", err)
 	}
 
@@ -119,6 +117,17 @@ func applyDefaults(s *Spec) {
 	}
 	if s.Workspace.BranchPref == "" {
 		s.Workspace.BranchPref = "agent/"
+	}
+	if len(s.Workspace.Repos) == 0 {
+		s.Workspace.Repos = []RepoSpec{
+			{Name: "default", Path: ".", BaseBranch: s.Workspace.BaseBranch},
+		}
+	} else {
+		for i := range s.Workspace.Repos {
+			if s.Workspace.Repos[i].BaseBranch == "" {
+				s.Workspace.Repos[i].BaseBranch = s.Workspace.BaseBranch
+			}
+		}
 	}
 	// Always include repo tree unless explicitly set to false in spec.
 	// Since bool zero-value is false, we check whether the YAML had a value.

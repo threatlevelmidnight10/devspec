@@ -77,7 +77,7 @@ TASK:
 CONSTRAINTS:
 - Max diff lines: %d
 - Tests required: %t
-- Produce changes directly in workspace.
+- CRITICAL: You are running inside a virtual workspace across multiple repositories. You MUST use EXACT ABSOLUTE PATHS when editing or reading files. Do NOT use relative paths like 'backend/main.go', use the full absolute path as shown in the REPO TREE.
 `,
 		header("IMPLEMENTER SYSTEM PROMPT", in.ImplPrompt),
 		header("SKILLS", joinBlocks(in.Skills)),
@@ -104,6 +104,7 @@ CHECKLIST:
 - Migration safety.
 - Backward compatibility.
 - Constraint compliance.
+- CRITICAL: Use EXACT ABSOLUTE PATHS for any further file modifications.
 `,
 		header("IMPLEMENTER SYSTEM PROMPT", in.ImplPrompt),
 		header("SKILLS", joinBlocks(in.Skills)),

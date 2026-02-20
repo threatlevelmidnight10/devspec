@@ -1,7 +1,6 @@
 package spec
 
 import (
-	"os"
 	"testing"
 )
 
@@ -32,27 +31,7 @@ func TestEffectiveModelUsesOverride(t *testing.T) {
 	}
 }
 
-func TestLoadParsesNestedAgents(t *testing.T) {
-	b, err := os.ReadFile("../../examples/schema-migration.yaml")
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	root, err := parseYAML(b)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	agents, ok := root["agents"].(map[string]any)
-	if !ok {
-		t.Fatalf("agents missing or wrong type: %#v", root["agents"])
-	}
-	impl, ok := agents["implementer"].(map[string]any)
-	if !ok {
-		t.Fatalf("implementer missing or wrong type: %#v", agents["implementer"])
-	}
-	if impl["system_prompt"] != "agents/implementer.md" {
-		t.Fatalf("unexpected parser value: %#v", impl["system_prompt"])
-	}
-
+func TestSpecParsing(t *testing.T) {
 	s, err := Load("../../examples/schema-migration.yaml")
 	if err != nil {
 		t.Fatalf("unexpected load error: %v", err)

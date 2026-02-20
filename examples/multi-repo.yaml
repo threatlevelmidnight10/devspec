@@ -1,0 +1,46 @@
+version: 0.1
+
+name: multi-repo-demo
+description: Add a new health check endpoint to backend and show it on frontend
+
+orchestrator:
+  type: cursor
+  model: auto
+  binary: agent
+
+workspace:
+  base_branch: main
+  branch_prefix: agent/
+  auto_commit: true
+  repos:
+  - name: backend
+    path: demo-backend
+  - name: frontend
+    path: demo-frontend
+
+context:
+  include_repo_tree: true
+  include_git_diff: false
+
+agents:
+  planner:
+    system_prompt: agents/planner.md
+    read_only: true
+
+  implementer:
+    system_prompt: agents/implementer.md
+    read_only: false
+
+execution:
+  phases:
+    - plan
+    - implement
+    - self_review
+
+constraints:
+  max_iterations: 3
+  max_diff_lines: 200
+  require_tests: false
+
+output:
+  create_pr: false
