@@ -81,9 +81,9 @@ func usageError() error {
 }
 
 func usage() string {
-	return `agentflow - deterministic agent workflow runner
+	return `devspec - deterministic agent workflow runner
 
 Usage:
-  agentflow run <spec.yaml> --task "..." [--dry-run] [--no-pr] [--model override-model] [--max-iter N]
+  devspec run <spec.yaml> --task "..." [--dry-run] [--no-pr] [--model override-model] [--max-iter N]
 `
 }

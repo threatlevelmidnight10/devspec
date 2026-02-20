@@ -1,19 +1,20 @@
-# agentflow
+# devspec
 
-`agentflow` is a thin Go orchestration CLI for deterministic Cursor-agent workflows.
+`devspec` is a thin Go orchestration CLI for deterministic Cursor-agent workflows.
 
 ## Install
 
 Option 1 (recommended): Go install
 
 ```bash
-go install github.com/threatlevelmidnight10/devspec/cmd/agentflow@latest
+go install github.com/threatlevelmidnight10/devspec/cmd/devspec@latest
 ```
 
-Option 2: Homebrew (build from this repo)
+Option 2: Homebrew
 
 ```bash
-brew install --HEAD https://raw.githubusercontent.com/threatlevelmidnight10/devspec/main/Formula/agentflow.rb
+brew tap threatlevelmidnight10/devspec https://github.com/threatlevelmidnight10/devspec
+brew install devspec
 ```
 
 ## MVP Features
@@ -27,7 +28,7 @@ brew install --HEAD https://raw.githubusercontent.com/threatlevelmidnight10/devs
 ## Usage
 
 ```bash
-go run ./cmd/agentflow run examples/schema-migration.yaml \
+devspec run examples/schema-migration.yaml \
   --task "Migrate user table to UUID PK"
 ```
 
@@ -45,5 +46,5 @@ Flags:
 
 ## Notes
 
-- In MVP, MCP servers are declarative only. `agentflow` does not start/stop MCP servers.
+- In MVP, MCP servers are declarative only. `devspec` does not start/stop MCP servers.
 - Spec-relative paths are resolved from the spec file directory.

@@ -122,7 +122,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 
-	fmt.Printf("agentflow completed successfully on branch %s\n", st.branchName)
+	fmt.Printf("devspec completed successfully on branch %s\n", st.branchName)
 	return nil
 }
 
@@ -320,7 +320,7 @@ func (r *Runner) finalize(ctx context.Context, st *runState) error {
 		if err := gitutil.AddAll(ctx, st.repoRoot); err != nil {
 			return err
 		}
-		msg := fmt.Sprintf("agentflow: %s", r.Spec.Name)
+		msg := fmt.Sprintf("devspec: %s", r.Spec.Name)
 		if err := gitutil.Commit(ctx, st.repoRoot, msg); err != nil {
 			return err
 		}
