@@ -328,24 +328,28 @@ func (r *Runner) finalize(ctx context.Context, st *runState) error {
 	}
 
 	if r.Spec.Output.CreatePR && !r.Opts.NoPR {
-		if err := createPR(ctx, st.repoRoot, r.Spec, st.branchName); err != nil {
+		if err := gitutil.Push(ctx, st.repoRoot, st.branchName); err != nil {
 			return err
 		}
-		fmt.Println("pull request created")
+		if err := createPR(ctx, st.repoRoot, r.Spec, st.branchName, r.Opts.Task); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-func createPR(ctx context.Context, repoRoot string, s *spec.Spec, branch string) error {
+func createPR(ctx context.Context, repoRoot string, s *spec.Spec, branch, task string) error {
 	bodyPath := s.ResolvePath(s.Output.PRTemplate)
 	if _, err := os.Stat(bodyPath); err != nil {
 		return fmt.Errorf("pr template not found: %w", err)
 	}
 
+	title := fmt.Sprintf("devspec: %s", task)
 	cmd := exec.CommandContext(ctx, "gh", "pr", "create",
 		"--base", s.Workspace.BaseBranch,
 		"--head", branch,
+		"--title", title,
 		"--body-file", bodyPath,
 	)
 	cmd.Dir = repoRoot
@@ -353,6 +357,8 @@ func createPR(ctx context.Context, repoRoot string, s *spec.Spec, branch string)
 	if err != nil {
 		return fmt.Errorf("gh pr create failed: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
+	prURL := strings.TrimSpace(string(out))
+	fmt.Printf("pull request created: %s\n", prURL)
 	return nil
 }
 

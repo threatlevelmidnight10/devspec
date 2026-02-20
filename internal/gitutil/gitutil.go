@@ -100,6 +100,11 @@ func Commit(ctx context.Context, workdir, message string) error {
 	return err
 }
 
+func Push(ctx context.Context, workdir, branch string) error {
+	_, err := runGit(ctx, workdir, "push", "-u", "origin", branch)
+	return err
+}
+
 func DiffLineCount(diff string) int {
 	var count int
 	for _, line := range strings.Split(diff, "\n") {

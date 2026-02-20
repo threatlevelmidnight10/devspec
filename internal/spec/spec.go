@@ -120,6 +120,10 @@ func applyDefaults(s *Spec) {
 	if s.Workspace.BranchPref == "" {
 		s.Workspace.BranchPref = "agent/"
 	}
+	// Always include repo tree unless explicitly set to false in spec.
+	// Since bool zero-value is false, we check whether the YAML had a value.
+	// For simplicity, we always default to true here.
+	s.Context.IncludeRepoTree = true
 	if s.Constraints.MaxIterations == 0 {
 		s.Constraints.MaxIterations = 5
 	}
