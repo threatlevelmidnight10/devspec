@@ -1,0 +1,53 @@
+version: 0.1
+
+name: schema-migration-v1
+description: Standard workflow for backend schema migrations
+
+orchestrator:
+  type: cursor
+  model: claude-3.5-sonnet
+  binary: cursor-agent
+
+workspace:
+  base_branch: main
+  branch_prefix: agent/
+  auto_commit: true
+
+context:
+  include_repo_tree: true
+  include_git_diff: false
+  include_untracked: false
+
+agents:
+  planner:
+    system_prompt: agents/planner.md
+    read_only: true
+
+  implementer:
+    system_prompt: agents/implementer.md
+    read_only: false
+
+skills:
+  - skills/migration_patterns.md
+  - skills/repo_rules.md
+
+mcp:
+  enabled: true
+  servers:
+    - postgres
+    - internal-api-docs
+
+execution:
+  phases:
+    - plan
+    - implement
+    - self_review
+
+constraints:
+  max_iterations: 5
+  max_diff_lines: 800
+  require_tests: true
+
+output:
+  create_pr: true
+  pr_template: templates/pr.md
