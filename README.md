@@ -1,6 +1,6 @@
 # devspec
 
-Deterministic AI coding workflows for any repo. Define your workflow as a YAML spec, point it at the [Cursor Agent CLI](https://docs.cursor.com/agent/cli), and let it run — with guardrails.
+Specify exactly how AI should modify your codebase using a versioned YAML workflow, so every run produces consistent, reviewable changes across the team, point it at the [Cursor Agent CLI](https://docs.cursor.com/agent/cli), and let it run — with guardrails. 
 
 ```
 devspec run workflow.yaml --task "Add pagination to /api/users"
