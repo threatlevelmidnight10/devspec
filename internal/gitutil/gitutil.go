@@ -23,7 +23,7 @@ func EnsureClean(ctx context.Context, workdir string) error {
 		return err
 	}
 	if strings.TrimSpace(out) != "" {
-		return errors.New("git working tree is dirty; commit or stash changes before running devspec")
+		return errors.New("git working tree is dirty; please commit, stash (git stash -u), or remove untracked/modified files before running devspec")
 	}
 	return nil
 }
