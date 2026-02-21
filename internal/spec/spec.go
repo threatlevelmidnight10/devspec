@@ -10,33 +10,28 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var allowedPhases = map[string]struct{}{
-	"plan":        {},
-	"implement":   {},
-	"self_review": {},
+var allowedStepModes = map[string]struct{}{
+	"":      {},
+	"agent": {},
+	"plan":  {},
+	"ask":   {},
 }
 
 type Spec struct {
-	Version      string           `yaml:"version" json:"version"`
-	Name         string           `yaml:"name" json:"name"`
-	Description  string           `yaml:"description" json:"description"`
-	Orchestrator Orchestrator     `yaml:"orchestrator" json:"orchestrator"`
-	Workspace    Workspace        `yaml:"workspace" json:"workspace"`
-	Context      Context          `yaml:"context" json:"context"`
-	Agents       map[string]Agent `yaml:"agents" json:"agents"`
-	Skills       []string         `yaml:"skills" json:"skills"`
-	MCP          MCPConfig        `yaml:"mcp" json:"mcp"`
-	Execution    Execution        `yaml:"execution" json:"execution"`
-	Constraints  Constraints      `yaml:"constraints" json:"constraints"`
-	Output       Output           `yaml:"output" json:"output"`
-	SourcePath   string           `yaml:"-" json:"-"`
-	SourceDir    string           `yaml:"-" json:"-"`
-}
-
-type Orchestrator struct {
-	Type   string `yaml:"type" json:"type"`
-	Model  string `yaml:"model" json:"model"`
-	Binary string `yaml:"binary" json:"binary"`
+	Version     string           `yaml:"version" json:"version"`
+	Name        string           `yaml:"name" json:"name"`
+	Description string           `yaml:"description" json:"description"`
+	Model       string           `yaml:"model" json:"model"`
+	Workspace   Workspace        `yaml:"workspace" json:"workspace"`
+	Context     Context          `yaml:"context" json:"context"`
+	Agents      map[string]Agent `yaml:"agents" json:"agents"`
+	Skills      []string         `yaml:"skills" json:"skills"`
+	Steps       []Step           `yaml:"steps" json:"steps"`
+	Constraints Constraints      `yaml:"constraints" json:"constraints"`
+	Output      Output           `yaml:"output" json:"output"`
+	Binary      string           `yaml:"binary" json:"binary"`
+	SourcePath  string           `yaml:"-" json:"-"`
+	SourceDir   string           `yaml:"-" json:"-"`
 }
 
 type Workspace struct {
@@ -59,17 +54,18 @@ type Context struct {
 }
 
 type Agent struct {
-	SystemPrompt string `yaml:"system_prompt" json:"system_prompt"`
-	ReadOnly     bool   `yaml:"read_only" json:"read_only"`
+	Prompt   string `yaml:"prompt" json:"prompt"`
+	Model    string `yaml:"model" json:"model"`
+	ReadOnly bool   `yaml:"read_only" json:"read_only"`
 }
 
-type MCPConfig struct {
-	Enabled bool     `yaml:"enabled" json:"enabled"`
-	Servers []string `yaml:"servers" json:"servers"`
-}
-
-type Execution struct {
-	Phases []string `yaml:"phases" json:"phases"`
+type Step struct {
+	Name         string `yaml:"name" json:"name"`
+	Agent        string `yaml:"agent" json:"agent"`
+	Mode         string `yaml:"mode" json:"mode"`
+	Run          string `yaml:"run" json:"run"`
+	AllowFailure bool   `yaml:"allow_failure" json:"allow_failure"`
+	Retry        int    `yaml:"retry" json:"retry"`
 }
 
 type Constraints struct {
@@ -109,8 +105,8 @@ func Load(path string) (*Spec, error) {
 }
 
 func applyDefaults(s *Spec) {
-	if s.Orchestrator.Binary == "" {
-		s.Orchestrator.Binary = "agent"
+	if s.Binary == "" {
+		s.Binary = "agent"
 	}
 	if s.Workspace.BaseBranch == "" {
 		s.Workspace.BaseBranch = "main"
@@ -129,9 +125,6 @@ func applyDefaults(s *Spec) {
 			}
 		}
 	}
-	// Always include repo tree unless explicitly set to false in spec.
-	// Since bool zero-value is false, we check whether the YAML had a value.
-	// For simplicity, we always default to true here.
 	s.Context.IncludeRepoTree = true
 	if s.Constraints.MaxIterations == 0 {
 		s.Constraints.MaxIterations = 5
@@ -148,21 +141,38 @@ func (s *Spec) Validate() error {
 	if s.Name == "" {
 		return errors.New("spec.name is required")
 	}
-	if s.Orchestrator.Type == "" {
-		return errors.New("orchestrator.type is required")
+	if strings.TrimSpace(s.Model) == "" {
+		return errors.New("model is required")
 	}
-	if s.Orchestrator.Type != "cursor" {
-		return fmt.Errorf("unsupported orchestrator.type %q", s.Orchestrator.Type)
+	if len(s.Steps) == 0 {
+		return errors.New("steps is required")
 	}
-	if s.Orchestrator.Model == "" {
-		return errors.New("orchestrator.model is required")
-	}
-	if len(s.Execution.Phases) == 0 {
-		return errors.New("execution.phases is required")
-	}
-	for _, p := range s.Execution.Phases {
-		if _, ok := allowedPhases[p]; !ok {
-			return fmt.Errorf("invalid phase %q; allowed: plan, implement, self_review", p)
+	for i, step := range s.Steps {
+		if strings.TrimSpace(step.Name) == "" {
+			return fmt.Errorf("steps[%d].name is required", i)
+		}
+		if step.Retry < 0 {
+			return fmt.Errorf("steps[%d].retry cannot be negative", i)
+		}
+		hasAgent := strings.TrimSpace(step.Agent) != ""
+		hasRun := strings.TrimSpace(step.Run) != ""
+		if hasAgent == hasRun {
+			return fmt.Errorf("steps[%d] must define exactly one of agent or run", i)
+		}
+		if _, ok := allowedStepModes[strings.TrimSpace(step.Mode)]; !ok {
+			return fmt.Errorf("steps[%d].mode %q is invalid; allowed: plan, ask, agent, or empty", i, step.Mode)
+		}
+		if hasRun && strings.TrimSpace(step.Mode) != "" {
+			return fmt.Errorf("steps[%d].mode is only valid for agent steps", i)
+		}
+		if hasAgent {
+			ag, ok := s.Agents[step.Agent]
+			if !ok {
+				return fmt.Errorf("steps[%d].agent %q is not defined in agents", i, step.Agent)
+			}
+			if strings.TrimSpace(ag.Prompt) == "" {
+				return fmt.Errorf("agents.%s.prompt is required", step.Agent)
+			}
 		}
 	}
 	if s.Constraints.MaxIterations <= 0 {
@@ -174,23 +184,6 @@ func (s *Spec) Validate() error {
 	if s.Output.CreatePR && strings.TrimSpace(s.Output.PRTemplate) == "" {
 		return errors.New("output.pr_template is required when output.create_pr is true")
 	}
-	if needsPhase(s.Execution.Phases, "plan") {
-		if _, ok := s.Agents["planner"]; !ok {
-			return errors.New("agents.planner is required when plan phase is enabled")
-		}
-	}
-	if needsAnyPhase(s.Execution.Phases, "implement", "self_review") {
-		if _, ok := s.Agents["implementer"]; !ok {
-			return errors.New("agents.implementer is required when implement or self_review phase is enabled")
-		}
-	}
-
-	for name, ag := range s.Agents {
-		if strings.TrimSpace(ag.SystemPrompt) == "" {
-			return fmt.Errorf("agents.%s.system_prompt is required", name)
-		}
-	}
-
 	return nil
 }
 
@@ -198,7 +191,18 @@ func (s *Spec) EffectiveModel(override string) string {
 	if override != "" {
 		return override
 	}
-	return s.Orchestrator.Model
+	return s.Model
+}
+
+func (s *Spec) EffectiveAgentModel(agentName, override string) string {
+	if override != "" {
+		return override
+	}
+	ag, ok := s.Agents[agentName]
+	if ok && strings.TrimSpace(ag.Model) != "" {
+		return strings.TrimSpace(ag.Model)
+	}
+	return s.Model
 }
 
 func (s *Spec) ResolvePath(path string) string {
@@ -206,26 +210,4 @@ func (s *Spec) ResolvePath(path string) string {
 		return path
 	}
 	return filepath.Join(s.SourceDir, path)
-}
-
-func needsPhase(phases []string, wanted string) bool {
-	for _, p := range phases {
-		if p == wanted {
-			return true
-		}
-	}
-	return false
-}
-
-func needsAnyPhase(phases []string, wanted ...string) bool {
-	set := make(map[string]struct{}, len(wanted))
-	for _, w := range wanted {
-		set[w] = struct{}{}
-	}
-	for _, p := range phases {
-		if _, ok := set[p]; ok {
-			return true
-		}
-	}
-	return false
 }

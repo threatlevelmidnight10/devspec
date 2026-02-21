@@ -17,15 +17,21 @@ func EnsureRepo(ctx context.Context, workdir string) error {
 	return nil
 }
 
-func EnsureClean(ctx context.Context, workdir string) error {
+func IsClean(ctx context.Context, workdir string) (bool, error) {
 	out, err := runGit(ctx, workdir, "status", "--porcelain")
 	if err != nil {
-		return err
+		return false, err
 	}
-	if strings.TrimSpace(out) != "" {
-		return errors.New("git working tree is dirty; please commit, stash (git stash -u), or remove untracked/modified files before running devspec")
-	}
-	return nil
+	return strings.TrimSpace(out) == "", nil
+}
+
+func DirtyFiles(ctx context.Context, workdir string) (string, error) {
+	return runGit(ctx, workdir, "status", "--short")
+}
+
+func Stash(ctx context.Context, workdir, message string) error {
+	_, err := runGit(ctx, workdir, "stash", "push", "-u", "-m", message)
+	return err
 }
 
 func Checkout(ctx context.Context, workdir, branch string) error {

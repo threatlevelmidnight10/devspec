@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/threatlevelmidnight10/devspec/internal/gitutil"
@@ -47,12 +49,10 @@ type runState struct {
 	repos              []repoState
 	workspaceFile      string
 	branchName         string
-	model              string
 	planOutput         string
 	repoTree           string
 	gitDiff            string
-	plannerPrompt      string
-	implementerPrompt  string
+	agentPrompts       map[string]string
 	skillBodies        []string
 	mutationIterations int
 }
@@ -76,14 +76,15 @@ func (r *Runner) Run(ctx context.Context) error {
 		r.Workdir = wd
 	}
 
-	st := &runState{model: r.Spec.EffectiveModel(r.Opts.ModelOverride)}
+	st := &runState{agentPrompts: map[string]string{}}
 	if r.Opts.MaxIterOverride > 0 {
 		r.Spec.Constraints.MaxIterations = r.Opts.MaxIterOverride
 	}
 	if r.Orchestrator == nil {
-		r.Orchestrator = orchestrator.CursorRunner{Binary: r.Spec.Orchestrator.Binary}
+		r.Orchestrator = orchestrator.CursorRunner{Binary: r.Spec.Binary}
 	}
 
+	var stashedRepos []string
 	for _, rSpec := range r.Spec.Workspace.Repos {
 		p := r.Spec.ResolvePath(rSpec.Path)
 		if err := gitutil.EnsureRepo(ctx, p); err != nil {
@@ -93,8 +94,28 @@ func (r *Runner) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("repo %q: %w", rSpec.Name, err)
 		}
-		if err := gitutil.EnsureClean(ctx, root); err != nil {
+		clean, err := gitutil.IsClean(ctx, root)
+		if err != nil {
 			return fmt.Errorf("repo %q: %w", rSpec.Name, err)
+		}
+		if !clean {
+			dirty, _ := gitutil.DirtyFiles(ctx, root)
+			if r.Opts.DryRun || !isInteractive() {
+				return fmt.Errorf("repo %q: git working tree is dirty:\n%s", rSpec.Name, strings.TrimSpace(dirty))
+			}
+			fmt.Printf("repo %q has uncommitted changes:\n%s\n", rSpec.Name, strings.TrimSpace(dirty))
+			fmt.Printf("Stash and continue? [y/N] ")
+			scanner := bufio.NewScanner(os.Stdin)
+			scanner.Scan()
+			ans := strings.TrimSpace(strings.ToLower(scanner.Text()))
+			if ans != "y" && ans != "yes" {
+				return fmt.Errorf("repo %q: aborted due to dirty working tree", rSpec.Name)
+			}
+			if err := gitutil.Stash(ctx, root, "devspec -- auto-stash before run"); err != nil {
+				return fmt.Errorf("repo %q: stash failed: %w", rSpec.Name, err)
+			}
+			stashedRepos = append(stashedRepos, rSpec.Name)
+			fmt.Printf("stashed changes in %s\n", rSpec.Name)
 		}
 		st.repos = append(st.repos, repoState{
 			spec: rSpec,
@@ -140,11 +161,24 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 	}()
 
-	for _, phase := range r.Spec.Execution.Phases {
-		fmt.Printf("==> phase: %s\n", phase)
-		if err := r.runPhase(ctx, st, phase); err != nil {
+	for i, step := range r.Spec.Steps {
+		stepNum := fmt.Sprintf("[%d/%d]", i+1, len(r.Spec.Steps))
+		if strings.TrimSpace(step.Run) != "" {
+			fmt.Printf("\n==> %s %s (shell)\n", stepNum, step.Name)
+		} else {
+			model := r.Spec.EffectiveAgentModel(step.Agent, r.Opts.ModelOverride)
+			mode := step.Mode
+			if mode == "" {
+				mode = "agent"
+			}
+			fmt.Printf("\n==> %s %s (agent: %s, model: %s, mode: %s)\n", stepNum, step.Name, step.Agent, model, mode)
+		}
+		start := time.Now()
+		if err := r.runStep(ctx, st, step); err != nil {
 			return err
 		}
+		elapsed := time.Since(start)
+		fmt.Printf("  done in %.1fs\n", elapsed.Seconds())
 	}
 
 	if err := r.finalize(ctx, st); err != nil {
@@ -152,41 +186,55 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 
 	fmt.Printf("devspec completed successfully on branch %s\n", st.branchName)
+	if len(stashedRepos) > 0 {
+		fmt.Println()
+		for _, name := range stashedRepos {
+			fmt.Printf("note: repo %q was stashed before run. Run 'git stash pop' in %s to restore.\n", name, name)
+		}
+	}
 	return nil
 }
 
 func (r *Runner) loadContent(st *runState) error {
-	planner, hasPlanner := r.Spec.Agents["planner"]
-	if hasPlanner {
-		b, err := os.ReadFile(r.Spec.ResolvePath(planner.SystemPrompt))
+	for name, ag := range r.Spec.Agents {
+		promptBody, err := r.resolveContent(ag.Prompt)
 		if err != nil {
-			return fmt.Errorf("read planner system prompt: %w", err)
+			return fmt.Errorf("resolve agent %q prompt: %w", name, err)
 		}
-		st.plannerPrompt = string(b)
-	}
-
-	impl, hasImpl := r.Spec.Agents["implementer"]
-	if hasImpl {
-		b, err := os.ReadFile(r.Spec.ResolvePath(impl.SystemPrompt))
-		if err != nil {
-			return fmt.Errorf("read implementer system prompt: %w", err)
-		}
-		st.implementerPrompt = string(b)
+		st.agentPrompts[name] = promptBody
 	}
 
 	if len(r.Spec.Skills) > 0 {
-		paths := make([]string, 0, len(r.Spec.Skills))
-		for _, p := range r.Spec.Skills {
-			paths = append(paths, r.Spec.ResolvePath(p))
+		for _, skill := range r.Spec.Skills {
+			skillBody, err := r.resolveContent(skill)
+			if err != nil {
+				return fmt.Errorf("resolve skill: %w", err)
+			}
+			st.skillBodies = append(st.skillBodies, skillBody)
 		}
-		skills, err := prompt.LoadFiles(paths)
-		if err != nil {
-			return err
-		}
-		st.skillBodies = skills
 	}
 
 	return nil
+}
+
+func (r *Runner) resolveContent(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if strings.Contains(raw, "\n") {
+		return raw, nil
+	}
+	path := r.Spec.ResolvePath(raw)
+	if _, err := os.Stat(path); err == nil {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", path, err)
+		}
+		return string(b), nil
+	}
+	// Treat as inline one-line content when it doesn't resolve to an existing file.
+	return raw, nil
 }
 
 func (r *Runner) setupWorkspace(ctx context.Context, st *runState) error {
@@ -258,14 +306,34 @@ func (r *Runner) writeWorkspaceFile(st *runState) error {
 	return nil
 }
 
-func (r *Runner) runPhase(ctx context.Context, st *runState, phase string) error {
+func (r *Runner) runStep(ctx context.Context, st *runState, step spec.Step) error {
 	if r.Opts.DryRun {
-		fmt.Printf("dry-run: would execute %s\n", phase)
+		if strings.TrimSpace(step.Run) != "" {
+			fmt.Printf("dry-run: would run shell step %s\n", step.Name)
+		} else {
+			fmt.Printf("dry-run: would execute agent step %s\n", step.Name)
+		}
 		return nil
 	}
+	if strings.TrimSpace(step.Run) != "" {
+		return r.runCommandStep(ctx, step)
+	}
+	return r.runAgentStep(ctx, st, step)
+}
 
-	switch phase {
-	case "plan":
+func (r *Runner) runAgentStep(ctx context.Context, st *runState, step spec.Step) error {
+	agPrompt, ok := st.agentPrompts[step.Agent]
+	if !ok {
+		return fmt.Errorf("prompt for agent %q not loaded", step.Agent)
+	}
+	mode := strings.TrimSpace(step.Mode)
+	if mode == "agent" {
+		mode = ""
+	}
+	model := r.Spec.EffectiveAgentModel(step.Agent, r.Opts.ModelOverride)
+
+	switch {
+	case mode == "plan":
 		for i := range st.repos {
 			before, err := gitutil.ChangedFiles(ctx, st.repos[i].path)
 			if err != nil {
@@ -277,11 +345,11 @@ func (r *Runner) runPhase(ctx context.Context, st *runState, phase string) error
 		out, err := r.Orchestrator.Run(ctx, prompt.BuildPlan(prompt.Inputs{
 			Spec:          r.Spec,
 			Task:          r.Opts.Task,
-			PlannerPrompt: st.plannerPrompt,
+			PlannerPrompt: agPrompt,
 			Skills:        st.skillBodies,
 			RepoTree:      st.repoTree,
 			GitDiff:       st.gitDiff,
-		}), orchestrator.RunConfig{Model: st.model, Mode: "plan", WorkspacePath: st.workspaceFile})
+		}), orchestrator.RunConfig{Model: model, Mode: "plan", WorkspacePath: st.workspaceFile})
 		if err != nil {
 			return err
 		}
@@ -296,32 +364,8 @@ func (r *Runner) runPhase(ctx context.Context, st *runState, phase string) error
 				return fmt.Errorf("plan phase modified files in repo %q, which is not allowed", rs.spec.Name)
 			}
 		}
-		fmt.Println("plan phase complete")
 		return nil
-
-	case "implement":
-		if err := r.bumpIteration(st); err != nil {
-			return err
-		}
-		_, err := r.Orchestrator.Run(ctx, prompt.BuildImplement(prompt.Inputs{
-			Spec:       r.Spec,
-			Task:       r.Opts.Task,
-			ImplPrompt: st.implementerPrompt,
-			Skills:     st.skillBodies,
-			RepoTree:   st.repoTree,
-			GitDiff:    st.gitDiff,
-			PlanOutput: st.planOutput,
-		}), orchestrator.RunConfig{Model: st.model, Mode: "agent", WorkspacePath: st.workspaceFile})
-		if err != nil {
-			return err
-		}
-		if err := r.validateMutation(ctx, st, true); err != nil {
-			return err
-		}
-		fmt.Println("implement phase complete")
-		return nil
-
-	case "self_review":
+	case strings.EqualFold(step.Name, "self_review"):
 		if err := r.bumpIteration(st); err != nil {
 			return err
 		}
@@ -339,22 +383,68 @@ func (r *Runner) runPhase(ctx context.Context, st *runState, phase string) error
 
 		_, err := r.Orchestrator.Run(ctx, prompt.BuildSelfReview(prompt.Inputs{
 			Spec:       r.Spec,
-			ImplPrompt: st.implementerPrompt,
+			ImplPrompt: agPrompt,
 			Skills:     st.skillBodies,
 			DiffOutput: strings.Join(currentDiffs, "\n\n"),
-		}), orchestrator.RunConfig{Model: st.model, Mode: "agent", WorkspacePath: st.workspaceFile})
+		}), orchestrator.RunConfig{Model: model, Mode: mode, WorkspacePath: st.workspaceFile})
 		if err != nil {
 			return err
 		}
 		if err := r.validateMutation(ctx, st, false); err != nil {
 			return err
 		}
-		fmt.Println("self_review phase complete")
 		return nil
-
 	default:
-		return fmt.Errorf("unsupported phase %q", phase)
+		if err := r.bumpIteration(st); err != nil {
+			return err
+		}
+		_, err := r.Orchestrator.Run(ctx, prompt.BuildImplement(prompt.Inputs{
+			Spec:       r.Spec,
+			Task:       r.Opts.Task,
+			ImplPrompt: agPrompt,
+			Skills:     st.skillBodies,
+			RepoTree:   st.repoTree,
+			GitDiff:    st.gitDiff,
+			PlanOutput: st.planOutput,
+		}), orchestrator.RunConfig{Model: model, Mode: mode, WorkspacePath: st.workspaceFile})
+		if err != nil {
+			return err
+		}
+		// Keep existing behavior: require a non-empty diff on the first implement step.
+		requireDiff := strings.EqualFold(step.Name, "implement")
+		if err := r.validateMutation(ctx, st, requireDiff); err != nil {
+			return err
+		}
+		return nil
 	}
+}
+
+func (r *Runner) runCommandStep(ctx context.Context, step spec.Step) error {
+	cmdStr := step.Run
+	if len(cmdStr) > 60 {
+		cmdStr = cmdStr[:57] + "..."
+	}
+	sp := newSpinner(fmt.Sprintf("running: %s", cmdStr))
+	sp.Start()
+	cmd := exec.CommandContext(ctx, "sh", "-c", step.Run)
+	cmd.Dir = r.Workdir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		sp.Stop(fmt.Sprintf("  ✗ %s failed", step.Name))
+		if step.AllowFailure {
+			fmt.Printf("  (allow_failure=true, continuing)\n")
+			if trimmed := strings.TrimSpace(string(out)); trimmed != "" {
+				fmt.Printf("  %s\n", trimmed)
+			}
+			return nil
+		}
+		return fmt.Errorf("step %s failed: %w\n%s", step.Name, err, strings.TrimSpace(string(out)))
+	}
+	sp.Stop(fmt.Sprintf("  ✓ %s passed", step.Name))
+	if trimmed := strings.TrimSpace(string(out)); trimmed != "" {
+		fmt.Printf("  %s\n", trimmed)
+	}
+	return nil
 }
 
 func (r *Runner) bumpIteration(st *runState) error {
@@ -498,6 +588,63 @@ func hasTestFile(files []string) bool {
 		}
 	}
 	return false
+}
+
+type spinner struct {
+	msg    string
+	stop   chan struct{}
+	done   chan struct{}
+	mu     sync.Mutex
+	active bool
+}
+
+func newSpinner(msg string) *spinner {
+	return &spinner{msg: msg, stop: make(chan struct{}), done: make(chan struct{})}
+}
+
+func (s *spinner) Start() {
+	s.mu.Lock()
+	s.active = true
+	s.mu.Unlock()
+	go func() {
+		defer close(s.done)
+		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		i := 0
+		t := time.NewTicker(80 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-s.stop:
+				fmt.Printf("\r\033[K")
+				return
+			case <-t.C:
+				fmt.Printf("\r  %s %s", frames[i%len(frames)], s.msg)
+				i++
+			}
+		}
+	}()
+}
+
+func (s *spinner) Stop(status string) {
+	s.mu.Lock()
+	wasActive := s.active
+	s.active = false
+	s.mu.Unlock()
+	if wasActive {
+		close(s.stop)
+		<-s.done
+	}
+	if status != "" {
+		fmt.Println(status)
+	}
+}
+
+func isInteractive() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 func sameFiles(a, b []string) bool {

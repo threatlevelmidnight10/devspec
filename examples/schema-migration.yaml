@@ -2,11 +2,7 @@ version: 0.1
 
 name: schema-migration-v1
 description: Standard workflow for backend schema migrations
-
-orchestrator:
-  type: cursor
-  model: auto
-  binary: agent
+model: auto
 
 workspace:
   base_branch: main
@@ -16,32 +12,28 @@ workspace:
 context:
   include_repo_tree: true
   include_git_diff: false
-  include_untracked: false
 
 agents:
   planner:
-    system_prompt: agents/planner.md
+    prompt: agents/planner.md
     read_only: true
 
   implementer:
-    system_prompt: agents/implementer.md
+    prompt: agents/implementer.md
     read_only: false
 
 skills:
   - skills/migration_patterns.md
   - skills/repo_rules.md
 
-mcp:
-  enabled: true
-  servers:
-    - postgres
-    - internal-api-docs
-
-execution:
-  phases:
-    - plan
-    - implement
-    - self_review
+steps:
+  - name: plan
+    agent: planner
+    mode: plan
+  - name: implement
+    agent: implementer
+  - name: self_review
+    agent: implementer
 
 constraints:
   max_iterations: 5

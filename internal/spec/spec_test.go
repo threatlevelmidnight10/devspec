@@ -4,17 +4,16 @@ import (
 	"testing"
 )
 
-func TestValidateRejectsInvalidPhase(t *testing.T) {
+func TestValidateRejectsInvalidStepMode(t *testing.T) {
 	s := Spec{
 		Version: "0.1",
 		Name:    "x",
-		Orchestrator: Orchestrator{
-			Type:  "cursor",
-			Model: "claude-3.5-sonnet",
+		Model:   "gpt-5.3-codex",
+		Steps: []Step{
+			{Name: "plan", Agent: "planner", Mode: "shipit"},
 		},
-		Execution: Execution{Phases: []string{"shipit"}},
 		Agents: map[string]Agent{
-			"planner": {SystemPrompt: "planner.md"},
+			"planner": {Prompt: "planner prompt"},
 		},
 		Constraints: Constraints{MaxIterations: 5, MaxDiffLines: 100},
 	}
@@ -25,9 +24,33 @@ func TestValidateRejectsInvalidPhase(t *testing.T) {
 }
 
 func TestEffectiveModelUsesOverride(t *testing.T) {
-	s := Spec{Orchestrator: Orchestrator{Model: "base"}}
+	s := Spec{Model: "base"}
 	if got := s.EffectiveModel("override"); got != "override" {
 		t.Fatalf("expected override, got %q", got)
+	}
+}
+
+func TestEffectiveAgentModelUsesAgentValue(t *testing.T) {
+	s := Spec{
+		Model: "default-model",
+		Agents: map[string]Agent{
+			"planner": {Model: "planner-model"},
+		},
+	}
+	if got := s.EffectiveAgentModel("planner", ""); got != "planner-model" {
+		t.Fatalf("expected planner-model, got %q", got)
+	}
+}
+
+func TestEffectiveAgentModelFallsBackToSpecModel(t *testing.T) {
+	s := Spec{
+		Model: "default-model",
+		Agents: map[string]Agent{
+			"planner": {Prompt: "do stuff"},
+		},
+	}
+	if got := s.EffectiveAgentModel("planner", ""); got != "default-model" {
+		t.Fatalf("expected default-model, got %q", got)
 	}
 }
 
@@ -37,8 +60,11 @@ func TestSpecParsing(t *testing.T) {
 		t.Fatalf("unexpected load error: %v", err)
 	}
 
-	got := s.Agents["implementer"].SystemPrompt
+	got := s.Agents["implementer"].Prompt
 	if got != "agents/implementer.md" {
 		t.Fatalf("unexpected implementer prompt: %q", got)
+	}
+	if len(s.Steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(s.Steps))
 	}
 }
