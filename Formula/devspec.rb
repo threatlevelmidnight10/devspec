@@ -1,8 +1,8 @@
 class Devspec < Formula
   desc "Deterministic CLI orchestration for Cursor agent workflows"
   homepage "https://github.com/threatlevelmidnight10/devspec"
-  url "https://github.com/threatlevelmidnight10/devspec/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "68dc5d8fbc6512c9dd7e6a265a7e0899f7dc98d9f4f04894603d521c6cfd21a5"
+  url "https://github.com/threatlevelmidnight10/devspec/archive/refs/tags/v0.1.1.tar.gz"
+  sha256 "8f2c2b763c0926ba1a78b35b091a08f3aa986531429a46f0c149cc998d86ee08"
   head "https://github.com/threatlevelmidnight10/devspec.git", branch: "main"
 
   depends_on "go" => :build
