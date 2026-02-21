@@ -197,7 +197,7 @@ func (r *Runner) setupWorkspace(ctx context.Context, st *runState) error {
 			if err := gitutil.Checkout(ctx, rs.path, rs.spec.BaseBranch); err != nil {
 				return fmt.Errorf("repo %q checkout: %w", rs.spec.Name, err)
 			}
-			if err := gitutil.PullFFOnly(ctx, rs.path); err != nil {
+			if err := gitutil.PullFFOnly(ctx, rs.path, rs.spec.BaseBranch); err != nil {
 				return fmt.Errorf("repo %q pull: %w", rs.spec.Name, err)
 			}
 			if err := gitutil.CreateBranch(ctx, rs.path, st.branchName); err != nil {

@@ -33,12 +33,11 @@ func Checkout(ctx context.Context, workdir, branch string) error {
 	return err
 }
 
-func PullFFOnly(ctx context.Context, workdir string) error {
-	out, err := runGit(ctx, workdir, "pull", "--ff-only")
+func PullFFOnly(ctx context.Context, workdir, branch string) error {
+	out, err := runGit(ctx, workdir, "pull", "--ff-only", "origin", branch)
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "There is no tracking information") {
-			// Local-only repo, safely ignore
 			return nil
 		}
 		if strings.Contains(errStr, "fatal: Not possible to fast-forward, aborting") {
@@ -46,6 +45,10 @@ func PullFFOnly(ctx context.Context, workdir string) error {
 		}
 		if strings.Contains(errStr, "Please commit your changes or stash them") {
 			return errors.New("git pull --ff-only failed: you have local changes that would be overwritten. Please stash or commit them")
+		}
+		if strings.Contains(errStr, "Couldn't find remote ref") {
+			// No remote branch yet (local-only repo), safe to skip.
+			return nil
 		}
 		return fmt.Errorf("git pull --ff-only failed: %w\nOutput: %s", err, string(out))
 	}
